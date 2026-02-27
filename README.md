@@ -1,4 +1,7 @@
-# Antigravity Phone Connect 📱
+<div align="center">
+  <img src="./assets/antigravity.png" alt="Antigravity Phone Connect" width="300">
+  <h1>Antigravity Phone Connect 📱</h1>
+</div>
 
 [![License: GPL v3](https://img.shields.io/badge/License-GPLv3-blue.svg)](https://www.gnu.org/licenses/gpl-3.0)
 
