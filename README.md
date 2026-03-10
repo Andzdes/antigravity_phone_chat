@@ -193,6 +193,171 @@ This tool is designed with a **"Local-First"** security model.
 
 ---
 
+## 🔌 Deployment: Caddy + SSH Reverse Proxy (Stable Domain)
+
+If you have your own VPS, you can deploy Phone Connect behind a **Caddy reverse proxy** with an **SSH tunnel** instead of ngrok. This gives you a **stable domain** (no random URLs) with automatic Let's Encrypt HTTPS.
+
+### Architecture
+
+```text
+Phone (mobile network)
+    │ HTTPS (Let's Encrypt)
+    ▼
+ag.your-domain.com  (Caddy on VPS)
+    │ reverse_proxy
+    ▼
+host.docker.internal:8090  (VPS)
+    │  SSH Reverse Tunnel
+    ▼
+localhost:3443  (Home PC, Phone Connect)
+    │ CDP
+    ▼
+Antigravity IDE  (Home PC, debug mode)
+```
+
+### Step 1: Configure `.env` on your home PC
+
+```env
+APP_PASSWORD=your-secure-passcode
+PORT=3443
+TUNNEL_MODE=none
+ENABLE_HTTPS=false
+TRUST_PROXY=true
+EXTERNAL_URL=https://ag.your-domain.com
+SESSION_SECRET=your-random-secret-here
+AUTH_SALT=your-random-salt-here
+# SESSION_TTL_HOURS=720   # 30 days (default)
+```
+
+> 💡 `ENABLE_HTTPS=false` because TLS is handled by Caddy. `TRUST_PROXY=true` ensures the server sees real client IPs.
+
+### Step 2: Start Phone Connect
+
+```bash
+# Windows
+start_headless.bat
+
+# Linux/macOS
+./start_headless.sh
+
+# Or directly:
+node server.js
+```
+
+### Step 3: SSH Reverse Tunnel
+
+```bash
+# One-shot:
+ssh -R 8090:localhost:3443 root@your-vps
+
+# Persistent (recommended):
+autossh -M 0 -f -N \
+  -o "ServerAliveInterval 30" \
+  -o "ServerAliveCountMax 3" \
+  -R 8090:localhost:3443 root@your-vps
+```
+
+> ⚠️ Ensure `GatewayPorts yes` is set in your VPS `sshd_config` if Caddy runs in Docker.
+
+### Step 4: Caddy Config on VPS
+
+**Option A: Phone Connect serves HTTP** (recommended — simpler, TLS only at Caddy):
+
+```caddyfile
+ag.your-domain.com {
+    # Optional: extra auth layer at proxy level
+    # basic_auth {
+    #     user $2a$14$hashed_password
+    # }
+
+    reverse_proxy host.docker.internal:8090
+}
+```
+
+**Option B: Phone Connect serves HTTPS** (self-signed):
+
+```caddyfile
+ag.your-domain.com {
+    reverse_proxy host.docker.internal:8090 {
+        transport http {
+            tls
+            tls_insecure_skip_verify
+        }
+    }
+}
+```
+
+### Step 5: systemd Service (optional, Linux)
+
+```ini
+# /etc/systemd/system/ag-phone-connect.service
+[Unit]
+Description=Antigravity Phone Connect
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/home/user/antigravity_phone_chat
+ExecStart=/usr/bin/node server.js
+EnvironmentFile=/home/user/antigravity_phone_chat/.env
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
+```
+
+```bash
+sudo systemctl enable --now ag-phone-connect
+```
+
+### Usage
+
+1. Open `https://ag.your-domain.com` on your phone
+2. Enter your `APP_PASSWORD` (first time) — session cookie lasts 30 days by default
+3. Subsequent visits: you're already logged in, just open the URL
+
+---
+
+## 📋 CHANGELOG (Reverse Proxy / Stable Domain Support)
+
+### New Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `TUNNEL_MODE` | `ngrok` | `none` = no tunnel (reverse proxy mode), `ngrok` = original behavior |
+| `ENABLE_HTTPS` | auto | `true` / `false` / auto-detect from `certs/` |
+| `SSL_KEY_PATH` | `./certs/server.key` | Custom path to SSL private key |
+| `SSL_CERT_PATH` | `./certs/server.cert` | Custom path to SSL certificate |
+| `TRUST_PROXY` | `false` | Set to `true` when behind a reverse proxy |
+| `EXTERNAL_URL` | — | Your stable external URL (for diagnostics) |
+| `SESSION_TTL_HOURS` | `720` (30d) | Cookie session lifetime in hours |
+| `PASSCODE` | — | Alias for `APP_PASSWORD` |
+
+### Behavioral Changes
+
+- **`TUNNEL_MODE=none`**: The ngrok browser-warning header is no longer sent. No ngrok dependencies required.
+- **`TRUST_PROXY=true`**: Express `trust proxy` is enabled — `req.ip` reflects the real client IP from `X-Forwarded-For`.
+- **`ENABLE_HTTPS=false`**: Forces HTTP even when SSL certificates exist in `./certs/`.
+- **Cookie improvements**: Added `sameSite: 'lax'` for better cross-site security.
+- **Startup banner**: Server now logs active configuration (tunnel mode, HTTPS, TTL, external URL) at startup.
+- **`/health` endpoint**: Now includes `tunnelMode`, `trustProxy`, `externalUrl`, `sessionTtlHours`.
+
+### New Files
+
+| File | Purpose |
+|---|---|
+| `start_headless.bat` | Windows: start server directly (no Python, no ngrok) |
+| `start_headless.sh` | Linux/macOS: start server directly, sources `.env` |
+
+### Backward Compatibility
+
+- All existing behavior is preserved when `TUNNEL_MODE=ngrok` (default).
+- `APP_PASSWORD` still works; `PASSCODE` is just an alias.
+- Existing `start_ag_phone_connect.bat/sh` and `start_ag_phone_connect_web.bat/sh` work unchanged.
+
+---
+
 ## 📂 Documentation
 
 For more technical details, check out:
@@ -221,3 +386,4 @@ Copyright (C) 2026 **Krishna Kanth B** (@krishnakanthb13)
 </a>
 
 ---
+

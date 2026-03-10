@@ -20,9 +20,22 @@ const __dirname = dirname(__filename);
 const PORTS = [9000, 9001, 9002, 9003];
 const POLL_INTERVAL = 1000; // 1 second
 const SERVER_PORT = process.env.PORT || 3000;
-const APP_PASSWORD = process.env.APP_PASSWORD || 'antigravity';
+const APP_PASSWORD = process.env.APP_PASSWORD || process.env.PASSCODE || 'antigravity';
 const AUTH_COOKIE_NAME = 'ag_auth_token';
-// Note: hashString is defined later, so we'll initialize the token inside createServer or use a simple string for now.
+
+// ─── Configuration ──────────────────────────────────────────────────────────
+const TUNNEL_MODE = (process.env.TUNNEL_MODE || 'ngrok').toLowerCase();   // none | ngrok
+const TRUST_PROXY = process.env.TRUST_PROXY === 'true';                   // Enable when behind Caddy/nginx
+const EXTERNAL_URL = process.env.EXTERNAL_URL || '';                      // e.g. https://ag.8n8n.online
+const SESSION_TTL_HOURS = parseInt(process.env.SESSION_TTL_HOURS, 10) || 720; // Default: 30 days
+const SESSION_TTL_MS = SESSION_TTL_HOURS * 60 * 60 * 1000;
+
+// SSL configuration — can be overridden via env or auto-detected from certs/
+const ENABLE_HTTPS_ENV = process.env.ENABLE_HTTPS; // 'true' | 'false' | undefined (auto)
+const SSL_KEY_PATH_ENV = process.env.SSL_KEY_PATH;
+const SSL_CERT_PATH_ENV = process.env.SSL_CERT_PATH;
+// ────────────────────────────────────────────────────────────────────────────
+
 let AUTH_TOKEN = 'ag_default_token';
 
 
@@ -1462,10 +1475,33 @@ async function startPolling(wss) {
 async function createServer() {
     const app = express();
 
-    // Check for SSL certificates
-    const keyPath = join(__dirname, 'certs', 'server.key');
-    const certPath = join(__dirname, 'certs', 'server.cert');
-    const hasSSL = fs.existsSync(keyPath) && fs.existsSync(certPath);
+    // Trust proxy headers when behind Caddy/nginx/reverse proxy
+    if (TRUST_PROXY) {
+        app.set('trust proxy', true);
+    }
+
+    // Resolve SSL certificate paths (env override → default)
+    const keyPath = SSL_KEY_PATH_ENV || join(__dirname, 'certs', 'server.key');
+    const certPath = SSL_CERT_PATH_ENV || join(__dirname, 'certs', 'server.cert');
+    const certsExist = fs.existsSync(keyPath) && fs.existsSync(certPath);
+
+    // Determine HTTPS: explicit env > auto-detect from certs
+    let hasSSL;
+    if (ENABLE_HTTPS_ENV === 'false') {
+        hasSSL = false;
+    } else if (ENABLE_HTTPS_ENV === 'true') {
+        if (!certsExist) {
+            console.error('❌ ENABLE_HTTPS=true but certificate files not found:');
+            console.error(`   Key:  ${keyPath}`);
+            console.error(`   Cert: ${certPath}`);
+            console.error('   Run: node generate_ssl.js  or set correct SSL_KEY_PATH / SSL_CERT_PATH');
+            process.exit(1);
+        }
+        hasSSL = true;
+    } else {
+        // Auto-detect (original behavior)
+        hasSSL = certsExist;
+    }
 
     let server;
     let httpsServer = null;
@@ -1494,12 +1530,13 @@ async function createServer() {
     const sessionSecret = process.env.SESSION_SECRET || 'antigravity_secret_key_1337';
     app.use(cookieParser(sessionSecret));
 
-    // Ngrok Bypass Middleware
-    app.use((req, res, next) => {
-        // Tell ngrok to skip the "visit" warning for API requests
-        res.setHeader('ngrok-skip-browser-warning', 'true');
-        next();
-    });
+    // Ngrok Bypass Middleware (only when using ngrok tunnel)
+    if (TUNNEL_MODE === 'ngrok') {
+        app.use((req, res, next) => {
+            res.setHeader('ngrok-skip-browser-warning', 'true');
+            next();
+        });
+    }
 
     // Auth Middleware
     app.use((req, res, next) => {
@@ -1518,7 +1555,8 @@ async function createServer() {
             res.cookie(AUTH_COOKIE_NAME, AUTH_TOKEN, {
                 httpOnly: true,
                 signed: true,
-                maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+                maxAge: SESSION_TTL_MS,
+                sameSite: 'lax'
             });
             // Remove the key from the URL by redirecting to the base path
             return res.redirect('/');
@@ -1546,7 +1584,8 @@ async function createServer() {
             res.cookie(AUTH_COOKIE_NAME, AUTH_TOKEN, {
                 httpOnly: true,
                 signed: true,
-                maxAge: 30 * 24 * 60 * 60 * 1000 // 30 days
+                maxAge: SESSION_TTL_MS,
+                sameSite: 'lax'
             });
             res.json({ success: true });
         } else {
@@ -1576,7 +1615,11 @@ async function createServer() {
             cdpConnected: cdpConnection?.ws?.readyState === 1, // WebSocket.OPEN = 1
             uptime: process.uptime(),
             timestamp: new Date().toISOString(),
-            https: hasSSL
+            https: hasSSL,
+            tunnelMode: TUNNEL_MODE,
+            trustProxy: TRUST_PROXY,
+            externalUrl: EXTERNAL_URL || null,
+            sessionTtlHours: SESSION_TTL_HOURS
         });
     });
 
@@ -2003,9 +2046,24 @@ async function main() {
         const localIP = getLocalIP();
         const protocol = hasSSL ? 'https' : 'http';
         server.listen(SERVER_PORT, '0.0.0.0', () => {
-            console.log(`🚀 Server running on ${protocol}://${localIP}:${SERVER_PORT}`);
+            console.log('');
+            console.log('═══════════════════════════════════════════════════');
+            console.log('  🚀 Antigravity Phone Connect Server');
+            console.log('═══════════════════════════════════════════════════');
+            console.log(`  Local:        ${protocol}://${localIP}:${SERVER_PORT}`);
+            console.log(`  HTTPS:        ${hasSSL ? 'enabled' : 'disabled'}`);
+            console.log(`  Tunnel Mode:  ${TUNNEL_MODE}`);
+            console.log(`  Trust Proxy:  ${TRUST_PROXY}`);
+            console.log(`  Session TTL:  ${SESSION_TTL_HOURS}h (${Math.round(SESSION_TTL_HOURS / 24)}d)`);
+            if (EXTERNAL_URL) {
+                console.log(`  External URL: ${EXTERNAL_URL}`);
+            }
+            console.log('═══════════════════════════════════════════════════');
             if (hasSSL) {
                 console.log(`💡 First time on phone? Accept the security warning to proceed.`);
+            }
+            if (TUNNEL_MODE === 'none') {
+                console.log('💡 Running in reverse-proxy mode. Set up your tunnel externally.');
             }
         });
 

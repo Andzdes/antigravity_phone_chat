@@ -4,6 +4,46 @@ All notable changes to **Antigravity Phone Connect** are documented here, in rev
 
 ---
 
+## v0.3.0 - Stable Domain & Reverse Proxy Support 🔌
+**Release Date:** March 2026
+
+---
+
+### ✨ New: Reverse Proxy / Stable Domain Mode (`TUNNEL_MODE=none`)
+
+Phone Connect can now run cleanly **behind a Caddy reverse proxy + SSH tunnel** (or any other reverse proxy), giving you a stable public URL with no dependency on ngrok.
+
+#### New Environment Variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `TUNNEL_MODE` | `ngrok` | `none` = headless (reverse proxy), `ngrok` = original behavior |
+| `ENABLE_HTTPS` | auto | `true` / `false` / auto-detect from `certs/` directory |
+| `SSL_KEY_PATH` | `./certs/server.key` | Custom path to SSL private key |
+| `SSL_CERT_PATH` | `./certs/server.cert` | Custom path to SSL certificate |
+| `TRUST_PROXY` | `false` | Set `true` when behind Caddy/nginx to trust `X-Forwarded-For` |
+| `EXTERNAL_URL` | — | Your stable public URL (shown in banner and `/health`) |
+| `SESSION_TTL_HOURS` | `720` | Cookie session lifetime in hours (default 30 days) |
+| `PASSCODE` | — | Alias for `APP_PASSWORD` |
+
+#### New Files
+- **`start_headless.bat`** — Windows: starts server directly, no Python, no ngrok. Suitable for Task Scheduler / manual use.
+- **`start_headless.sh`** — Linux/macOS: sources `.env`, uses `exec node server.js` for clean systemd integration.
+
+### 🔧 Improvements
+- **Conditional ngrok header**: `ngrok-skip-browser-warning` header is now only sent when `TUNNEL_MODE=ngrok`. In `none` mode, no ngrok headers are added.
+- **Cookie security**: Added `sameSite: 'lax'` to all auth cookies.
+- **Startup banner**: Server now prints active configuration table (tunnel mode, HTTPS, TTL, external URL) at startup.
+- **`/health` endpoint**: Extended with `tunnelMode`, `trustProxy`, `externalUrl`, `sessionTtlHours` fields.
+- **SSL flexibility**: `ENABLE_HTTPS=false` forces HTTP even when certificates exist in `./certs/`. Custom cert paths via `SSL_KEY_PATH` / `SSL_CERT_PATH`.
+- **launcher.py**: Added `--mode none` / auto-detection from `TUNNEL_MODE` env; pyngrok is imported conditionally (only in `web` mode).
+- **`.env.example`**: Complete rewrite with all variables organized by section with explanatory comments.
+
+### ↩️ Backward Compatibility
+All existing behavior is preserved. `TUNNEL_MODE` defaults to `ngrok`, so existing setups work unchanged.
+
+---
+
 ## v0.2.28 - UI/UX Pro Max & The Obsidian Overhaul 💎
 **Release Date:** February 27, 2026
 

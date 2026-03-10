@@ -15,13 +15,15 @@ antigravity_phone_chat/
 ├── certs/                          # SSL certificates directory (auto-generated, gitignored)
 │   ├── server.key                  # Private key
 │   └── server.cert                 # Self-signed certificate
-├── start_ag_phone_connect.bat      # Standard Windows launcher (LAN)
-├── start_ag_phone_connect_web.bat  # Web Windows launcher (Starts server + Global Tunnel)
-├── start_ag_phone_connect.sh       # Standard Mac/Linux launcher (LAN)
-├── start_ag_phone_connect_web.sh   # Web Mac/Linux launcher (Starts server + Global Tunnel)
+├── start_ag_phone_connect.bat      # Standard Windows launcher (LAN, via launcher.py)
+├── start_ag_phone_connect_web.bat  # Web Windows launcher (Starts server + ngrok Tunnel)
+├── start_ag_phone_connect.sh       # Standard Mac/Linux launcher (LAN, via launcher.py)
+├── start_ag_phone_connect_web.sh   # Web Mac/Linux launcher (Starts server + ngrok Tunnel)
+├── start_headless.bat              # Headless Windows launcher (direct node, no Python/ngrok)
+├── start_headless.sh               # Headless Mac/Linux launcher (direct node, for systemd)
 ├── install_context_menu.bat        # Windows Context Menu installer/manager
 ├── install_context_menu.sh         # Linux Context Menu installer (Creates .desktop files)
-├── launcher.py                     # Unified Python launcher (Manages Server, Tunnel, QR Codes)
+├── launcher.py                     # Unified Python launcher (local / web / none modes)
 ├── .env                            # Local configuration (Passwords & API Tokens - gitignored)
 ├── .env.example                    # Template for environment variables
 ├── package.json                    # Dependencies and metadata
@@ -42,10 +44,15 @@ graph TD
     S -- Cookie Auth --> P
     T[ngrok Tunnel] -- Proxy --> S
     P[Phone Frontend] -- Mobile Data --> T
+    C[Caddy Reverse Proxy] -- Proxy --> S
+    P -- Mobile Data --> C
+    SSH[SSH Reverse Tunnel] -- Forwards port --> C
     S -- CDP Commands --> AG
     PY[launcher.py Manager] -- Spawns/Kills --> S
     PY -- Monitors --> T
 ```
+
+> **Tunnel Mode**: When `TUNNEL_MODE=ngrok` the phone connects via the ngrok tunnel. When `TUNNEL_MODE=none` the phone connects via an external reverse proxy (e.g. Caddy + SSH tunnel) — the server itself is unaware of the tunnel.
 
 ## Core Modules & Methods (server.js)
 
@@ -76,7 +83,7 @@ graph TD
 | :--- | :--- | :--- |
 | `/login` | POST | Authenticates user and sets session cookie. |
 | `/logout` | POST | Clears session cookie. |
-| `/health` | GET | Returns server status, CDP connection state, and uptime. |
+| `/health` | GET | Returns server status, CDP connection state, uptime, and active configuration (`tunnelMode`, `trustProxy`, `externalUrl`, `sessionTtlHours`). |
 | `/snapshot` | GET | Returns latest captured HTML/CSS snapshot. |
 | `/app-state` | GET | Returns current Mode (Fast/Planning) and Model. |
 | `/ssl-status` | GET | Returns HTTPS status and certificate info. |
@@ -121,15 +128,17 @@ When using the `_web` launcher, the system utilizes `ngrok` to create a secure t
    Then update `NGROK_AUTHTOKEN`, `APP_PASSWORD`, and any AI provider keys (e.g., `GROQ_API_KEY`).
 
 ### 3. HTTPS/SSL Support
-The server automatically detects SSL certificates and enables HTTPS:
+The server resolves SSL configuration in priority order: explicit env > auto-detect from `./certs/`:
 
 1. **Certificate Generation**: Run `node generate_ssl.js`
    - **Hybrid approach**: Tries OpenSSL first (better SAN support), falls back to Node.js crypto
    - Automatically detects local IP addresses for certificate SANs
-2. **Auto-Detection**: Server checks for `certs/server.key` and `certs/server.cert`
-3. **Protocol Selection**: Uses HTTPS if certs exist, HTTP otherwise
-4. **WebSocket**: Automatically uses `wss://` for secure WebSocket when HTTPS is enabled
-5. **Web UI**: Users can generate certificates via the "Enable HTTPS" button when running HTTP
+2. **`ENABLE_HTTPS` env** (v0.3.0+):
+   - `ENABLE_HTTPS=false` — forces HTTP even when certificates exist (for reverse proxy setups)
+   - `ENABLE_HTTPS=true` — forces HTTPS; exits with error if certificates not found
+   - Unset — auto-detect (original behavior: use HTTPS if `./certs/server.key` + `./certs/server.cert` exist)
+3. **Custom paths**: `SSL_KEY_PATH` and `SSL_CERT_PATH` env vars override the default `./certs/` location.
+4. **WebSocket**: Automatically uses `wss://` for secure WebSocket when HTTPS is enabled.
 
 ## Dependencies
 
@@ -181,9 +190,10 @@ The server automatically detects SSL certificates and enables HTTPS:
 
 - **Self-Signed Certificates**: The generated certificates are self-signed; browsers will show a warning on the first visit.
 - **Selective Access**: LAN devices have automatic access. External tunnel connections (Web Mode) require a passcode or Magic Link.
-- **Session Security**: Uses signed, `httpOnly` cookies for authentication.
+- **Session Security**: Uses signed, `httpOnly`, `sameSite: lax` cookies for authentication.
 - **Input Sanitization**: User input is escaped using `JSON.stringify` before CDP injection.
 - **Output Encoding**: Data scraped from the IDE (like chat history titles) is strictly escaped via an `escapeHtml` utility before being inserted into the mobile DOM to prevent cross-site scripting (XSS).
+- **Reverse Proxy Trust** (v0.3.0+): When `TRUST_PROXY=true`, Express trusts `X-Forwarded-For` headers. This is required for correct client IP detection and LAN-bypass logic when the server runs behind Caddy or nginx. **Only set this when you control the proxy** — setting it on a public server without a trusted proxy creates an IP spoofing vector.
 
 > 📚 For detailed security information, browser warning bypass instructions, and recommendations, see [SECURITY.md](SECURITY.md).
 

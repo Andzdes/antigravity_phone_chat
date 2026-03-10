@@ -11,9 +11,13 @@ import logging
 # -----------------------------------------------------------------------------
 # Dependency Management
 # -----------------------------------------------------------------------------
-def check_dependencies():
+def check_dependencies(mode='web'):
     """Checks and installs required Python packages."""
-    needed = ["pyngrok", "python-dotenv", "qrcode"]
+    # In 'none' mode, we only need dotenv. No ngrok/qrcode needed.
+    if mode == 'none':
+        needed = ["python-dotenv"]
+    else:
+        needed = ["pyngrok", "python-dotenv", "qrcode"]
     installed = []
     
     # Check what is missing
@@ -95,22 +99,31 @@ def print_qr(url):
 # -----------------------------------------------------------------------------
 def main():
     parser = argparse.ArgumentParser(description="Antigravity Phone Connect Launcher")
-    parser.add_argument('--mode', choices=['local', 'web'], default='web', help="Mode to run in: 'local' (WiFi) or 'web' (Internet)")
+    parser.add_argument('--mode', choices=['local', 'web', 'none'], default=None,
+                        help="Mode to run in: 'local' (WiFi), 'web' (Internet/ngrok), 'none' (headless, behind reverse proxy)")
     args = parser.parse_args()
 
-    # 1. Setup Environment
-    check_dependencies()
+    # 1. Setup Environment — load .env first to detect TUNNEL_MODE
+    from dotenv import load_dotenv
+    load_dotenv()
+
+    # Auto-detect mode from TUNNEL_MODE env if not specified via CLI
+    if args.mode is None:
+        tunnel_env = os.environ.get('TUNNEL_MODE', '').lower()
+        if tunnel_env == 'none':
+            args.mode = 'none'
+        elif tunnel_env == 'ngrok':
+            args.mode = 'web'
+        else:
+            args.mode = 'web'  # Default for backward compatibility
+
+    check_dependencies(args.mode)
     check_node_environment()
     
-    # Suppress pyngrok noise (especially during shutdown)
-    logging.getLogger("pyngrok").setLevel(logging.ERROR)
-    
-    from pyngrok import ngrok
-
-    from dotenv import load_dotenv
-    
-    # Load .env if it exists
-    load_dotenv()
+    # Suppress pyngrok noise (only if we'll use it)
+    if args.mode == 'web':
+        logging.getLogger("pyngrok").setLevel(logging.ERROR)
+        from pyngrok import ngrok
     
     # Setup App Password
     passcode = os.environ.get('APP_PASSWORD')
@@ -181,6 +194,7 @@ def main():
             
         elif args.mode == 'web':
             # Check Ngrok Token
+            from pyngrok import ngrok
             token = os.environ.get('NGROK_AUTHTOKEN')
             if token:
                 ngrok.set_auth_token(token)
@@ -191,7 +205,8 @@ def main():
             
             # Detect HTTPS
             protocol = "http"
-            if os.path.exists('certs/server.key') and os.path.exists('certs/server.cert'):
+            enable_https = os.environ.get('ENABLE_HTTPS', '').lower()
+            if enable_https == 'true' or (enable_https != 'false' and os.path.exists('certs/server.key') and os.path.exists('certs/server.cert')):
                 protocol = "https"
                 
             addr = f"{protocol}://localhost:{port}"
@@ -220,6 +235,30 @@ def main():
             print(f"4. Or visit {public_url}")
             print(f"5. Enter passcode: {passcode}")
             print("6. You should be connected automatically!")
+
+        elif args.mode == 'none':
+            # Headless / Reverse Proxy mode — no tunnel, just server
+            port = os.environ.get('PORT', '3000')
+            external_url = os.environ.get('EXTERNAL_URL', '')
+            
+            # Detect protocol
+            protocol = "http"
+            enable_https = os.environ.get('ENABLE_HTTPS', '').lower()
+            if enable_https == 'true' or (enable_https != 'false' and os.path.exists('certs/server.key') and os.path.exists('certs/server.cert')):
+                protocol = "https"
+            
+            final_url = external_url or f"{protocol}://localhost:{port}"
+            
+            print("\n" + "="*50)
+            print(f"   🔌 REVERSE PROXY MODE (no tunnel)")
+            print("="*50)
+            print(f"🔗 Local:    {protocol}://localhost:{port}")
+            if external_url:
+                print(f"🌍 External: {external_url}")
+            print(f"🔑 Passcode: {passcode}")
+            print("-" * 50)
+            print("💡 Server is running. Set up your reverse proxy / SSH tunnel externally.")
+            print("   Example: ssh -R 8090:localhost:{} root@your-vps".format(port))
 
         print("="*50)
         print("✅ Server is running in background. Logs -> server_log.txt")
@@ -275,7 +314,8 @@ def main():
                     node_process.kill()
             
             if args.mode == 'web':
-                ngrok.kill()
+                from pyngrok import ngrok as ngrok_mod
+                ngrok_mod.kill()
         except:
             pass
         

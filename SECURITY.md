@@ -28,4 +28,18 @@
 - **Finding:** No immediate critical supply chain vulnerabilities observed.
 
 ---
-**Conclusion:** The repository is in strong standing. The underlying architecture explicitly proxies to a sandboxed desktop DOM environment, dramatically reducing server-side execution risks.
+
+## 🟡 5. Reverse Proxy Trust (`TRUST_PROXY`) — v0.3.0+
+**Status: Conditional**
+- **Background:** When `TRUST_PROXY=true`, Express trusts `X-Forwarded-For` headers and uses them as the real client IP for the `isLocalRequest()` check (LAN bypass logic).
+- **Risk:** If enabled on a server **without** a trusted reverse proxy in front of it, any client can spoof their IP by sending `X-Forwarded-For: 192.168.1.1` and bypass authentication entirely.
+- **Mitigation:** Only set `TRUST_PROXY=true` when a reverse proxy (Caddy, nginx) is exclusively controlling inbound traffic. Never expose the Node.js port directly to the internet when `TRUST_PROXY=true`.
+- **Recommendation:** In the Caddy + SSH tunnel architecture, the Node.js port is only reachable via the SSH tunnel — not exposed publicly — so `TRUST_PROXY=true` is safe.
+
+## 🟢 6. Cookie Security Improvements — v0.3.0+
+**Status: Improved**
+- **Change:** Auth cookies now include `sameSite: 'lax'` in addition to the existing `httpOnly` + `signed` attributes.
+- **Impact:** Reduces CSRF risk by preventing cookies from being sent on cross-site POST requests initiated by third-party sites.
+
+---
+**Conclusion:** The repository is in strong standing. The underlying architecture explicitly proxies to a sandboxed desktop DOM environment, dramatically reducing server-side execution risks. For reverse proxy deployments, follow `TRUST_PROXY` guidance above.
