@@ -206,10 +206,10 @@ Phone (mobile network)
 ag.your-domain.com  (Caddy on VPS)
     │ reverse_proxy
     ▼
-host.docker.internal:8090  (VPS)
+172.19.0.1:8090  (VPS Docker Host IP)
     │  SSH Reverse Tunnel
     ▼
-localhost:3443  (Home PC, Phone Connect)
+127.0.0.1:3443  (Home PC, Phone Connect)
     │ CDP
     ▼
 Antigravity IDE  (Home PC, debug mode)
@@ -227,6 +227,11 @@ EXTERNAL_URL=https://ag.your-domain.com
 SESSION_SECRET=your-random-secret-here
 AUTH_SALT=your-random-salt-here
 # SESSION_TTL_HOURS=720   # 30 days (default)
+
+# (Optional) Auto-start SSH Tunnel
+SSH_HOST=your-vps.com
+SSH_USER=root
+SSH_REMOTE_PORT=8090
 ```
 
 > 💡 `ENABLE_HTTPS=false` because TLS is handled by Caddy. `TRUST_PROXY=true` ensures the server sees real client IPs.
@@ -246,31 +251,35 @@ node server.js
 
 ### Step 3: SSH Reverse Tunnel
 
+> ⚠️ Always use `127.0.0.1` instead of `localhost` on Windows to prevent IPv6 `[::1]` resolution mismatches.
+
 ```bash
 # One-shot:
-ssh -R 8090:localhost:3443 root@your-vps
+ssh -R 8090:127.0.0.1:3443 root@your-vps
 
 # Persistent (recommended):
 autossh -M 0 -f -N \
   -o "ServerAliveInterval 30" \
   -o "ServerAliveCountMax 3" \
-  -R 8090:localhost:3443 root@your-vps
+  -R 8090:127.0.0.1:3443 root@your-vps
 ```
 
-> ⚠️ Ensure `GatewayPorts yes` is set in your VPS `sshd_config` if Caddy runs in Docker.
+> ⚠️ Ensure `GatewayPorts yes` is set in your VPS `/etc/ssh/sshd_config` so the tunnel listens on `0.0.0.0` instead of just loopback.
 
 ### Step 4: Caddy Config on VPS
 
-**Option A: Phone Connect serves HTTP** (recommended — simpler, TLS only at Caddy):
+If Caddy is running in Docker, you must point to the Docker Host IP (usually `172.19.0.1` or `172.17.0.1`), because `host.docker.internal` is not natively supported on Linux Docker.
+
+**Option A: Phone Connect serves HTTP** (recommended — TLS only at Caddy):
 
 ```caddyfile
 ag.your-domain.com {
-    # Optional: extra auth layer at proxy level
+    # Optional: extra protection
     # basic_auth {
     #     user $2a$14$hashed_password
     # }
 
-    reverse_proxy host.docker.internal:8090
+    reverse_proxy 172.19.0.1:8090
 }
 ```
 
@@ -278,7 +287,7 @@ ag.your-domain.com {
 
 ```caddyfile
 ag.your-domain.com {
-    reverse_proxy host.docker.internal:8090 {
+    reverse_proxy 172.19.0.1:8090 {
         transport http {
             tls
             tls_insecure_skip_verify
@@ -286,6 +295,9 @@ ag.your-domain.com {
     }
 }
 ```
+
+> 🛑 **Firewall Tip (UFW)**: If you use Docker + UFW, ensure the Docker subnet is allowed to access the host port!  
+> Run: `sudo ufw allow from 172.19.0.0/16 to any port 8090 && sudo ufw reload`
 
 ### Step 5: systemd Service (optional, Linux)
 
